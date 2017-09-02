@@ -1,0 +1,92 @@
+# Test script for integration of Jenkins and Ansible
+
+- hosts: localhost
+
+  vars:
+     region: eu-central-1
+     instance_type: t2.nano
+     base_image_name: ami-657bd20a
+     number_of_instances_to_create: 1
+
+  tasks:
+
+    - name: Setup variables for later use
+      set_fact:
+         region: "{{ region }}"
+
+    - name: Create a suitable set of firewall rules
+      ec2_group:
+         name: jenkins_server_security_groups
+         description: Specific rules for a Jenkins Instance
+         region: "{{ region }}"
+         rules_egress:
+            - proto: tcp
+              from_port: 0
+              to_port: 65535
+              cidr_ip: 0.0.0.0/0
+         rules:
+            - proto: tcp
+              from_port: 22
+              to_port: 22
+              cidr_ip: 0.0.0.0/0
+
+            - proto: tcp
+              from_port: 8080
+              to_port: 8080
+              cidr_ip: 0.0.0.0/0
+
+    - name: Start up an EC2 Temporary Instance
+      ec2:
+        key_name: AwsKeyPair
+        group: jenkins_server_security_groups
+        instance_type: "{{ instance_type }}"
+        image: "{{ base_image_name }}"
+        wait: yes
+        region: "{{ region }}"
+        exact_count: "{{ number_of_instances_to_create }}"
+        instance_tags:
+          Name: Dummy_Test
+        count_tag:
+          Name: Dummy_Test
+      register: ec2
+
+    - name: Gather the new ip addresses
+      add_host: groups=new_ec2_instances hostname="{{ item.public_ip }}"
+      with_items: "{{ ec2.instances }}"
+
+    - name: Wait for SSH Server to start responding
+      wait_for:
+              port: 22
+              host: "{{ item.public_ip }}"
+              state: started
+      with_items: "{{ ec2.instances }}"
+
+- hosts: new_ec2_instances, tag_Name_Dummy_Test
+
+  tasks:
+
+    - name: Hello World, is this Working?
+      debug: msg="Hello? Is this working?"
+
+    - name: Patch up the server - this will test if we can SSH
+      yum: name=* state=latest
+      become: yes
+
+
+- hosts: localhost
+
+  tasks:
+
+    - name: All working so destroy the temporary instance
+      ec2:
+        key_name: microservice-course-keypair
+        group: jenkins_server_security_groups
+        instance_type: notneeded
+        image: notneeded
+        wait: yes
+        region: "{{ region }}"
+        exact_count: 0
+        instance_tags:
+          Name: Dummy_Test
+        count_tag:
+          Name: Dummy_Test
